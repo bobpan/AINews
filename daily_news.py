@@ -10,7 +10,7 @@ from google.generativeai.types import HarmCategory, HarmBlockThreshold
 FEISHU_WEBHOOK = os.getenv("FEISHU_WEBHOOK")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # 默认使用 gemini-1.5-flash，速度快且免费额度足够
-MODEL_NAME = os.getenv("MODEL_NAME", "gemini-2.5-flash")
+MODEL_NAME = os.getenv("MODEL_NAME", "gemini-3-flash")
 
 # RSS 源列表
 RSS_SOURCES = [
