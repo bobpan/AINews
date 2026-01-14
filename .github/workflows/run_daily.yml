@@ -28,7 +28,6 @@ jobs:
     - name: Run Daily News Script
       env:
         FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
-        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         MODEL_NAME: ${{ secrets.MODEL_NAME }}
       run: python daily_news.py
