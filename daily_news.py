@@ -3,7 +3,7 @@ import datetime
 import time
 import requests
 import feedparser
-import google.generativeai as genai
+import google.genai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 # 配置
