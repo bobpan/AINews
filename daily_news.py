@@ -27,6 +27,11 @@ RSS_SOURCES = [
     {"name": "OpenAI Research (arXiv)", "url": "https://export.arxiv.org/rss/cs.AI"},
     {"name": "Machine Learning (arXiv)", "url": "https://export.arxiv.org/rss/cs.LG"},
     {"name": "Papers With Code", "url": "https://paperswithcode.com/rss"},
+    {"name": "Alibaba Cloud Blog", "url": "https://www.alibabacloud.com/blog/feed"},
+    {"name": "Alibaba Developer Blog", "url": "https://developer.aliyun.com/rss.xml"},
+    {"name": "Tencent Cloud Developer", "url": "https://cloud.tencent.com/developer/rss"},
+    {"name": "Tencent Open Source", "url": "https://opensource.tencent.com/feed"},
+    {"name": "Huawei Developer Blog", "url": "https://developer.huawei.com/ict/en/blog/rss"},
 ]
 
 
@@ -78,6 +83,7 @@ def get_recent_articles():
 
 def fetch_content_with_jina(url, fallback_summary=None):
     """使用 Jina Reader 获取正文，必要时回退到原站或摘要"""
+    forbidden = False
     try:
         jina_url = f"https://r.jina.ai/{url}"
         resp = requests.get(
@@ -89,11 +95,14 @@ def fetch_content_with_jina(url, fallback_summary=None):
             },
         )
         if resp.status_code == 200 and resp.text:
-            return resp.text
+            return resp.text, False
         if resp.status_code == 403:
+            forbidden = True
             print("Jina Reader 403，尝试直连原站...")
     except Exception:
         pass
+    if forbidden:
+        return None, True
     try:
         direct = requests.get(
             url,
@@ -104,96 +113,108 @@ def fetch_content_with_jina(url, fallback_summary=None):
             },
         )
         if direct.status_code == 200 and direct.text:
-            return direct.text
+            return direct.text, False
+        if direct.status_code == 403:
+            return None, True
     except Exception:
         pass
     if fallback_summary:
-        return fallback_summary
-    return "（无法获取正文，请基于标题总结）"
+        return fallback_summary, False
+    return "（无法获取正文，请基于标题总结）", False
 
 
-def summarize_article(client, article):
-    """调用 Gemini 总结单篇文章"""
-    print(f"正在总结: {article['title']}...")
-    content = fetch_content_with_jina(article["url"], article.get("summary"))
+def summarize_daily_brief(client, articles):
+    """整合当天文章，一次性生成简报与趋势洞察"""
+    safety_settings = [
+        types.SafetySetting(
+            category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+            threshold=types.HarmBlockThreshold.BLOCK_NONE,
+        ),
+        types.SafetySetting(
+            category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+            threshold=types.HarmBlockThreshold.BLOCK_NONE,
+        ),
+        types.SafetySetting(
+            category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+            threshold=types.HarmBlockThreshold.BLOCK_NONE,
+        ),
+        types.SafetySetting(
+            category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+            threshold=types.HarmBlockThreshold.BLOCK_NONE,
+        ),
+    ]
 
-    # Gemini 1.5 窗口很大，我们可以保留更多内容 (30k chars 约 10k tokens，安全)
-    content_snippet = content[:30000]
+    items = []
+    for article in articles:
+        print(f"正在整理: {article['title']}...")
+        content, forbidden = fetch_content_with_jina(
+            article["url"], article.get("summary")
+        )
+        if forbidden:
+            print(f"403 跳过文章: {article['title']}")
+            continue
+
+        text = content or article.get("summary") or ""
+        if not text:
+            continue
+        items.append(
+            {
+                "title": article["title"],
+                "source": article["source"],
+                "url": article["url"],
+                "text": text[:6000],
+            }
+        )
+
+    if not items:
+        return None
+
+    merged = "\n\n".join(
+        [
+            f"【{item['source']}】{item['title']}\n"
+            f"链接: {item['url']}\n"
+            f"内容:\n{item['text']}"
+            for item in items
+        ]
+    )
 
     prompt = f"""
-    你是一个 AI 技术情报专家。请阅读以下技术博客内容，为中文读者生成这篇简报。
-
-    文章标题: {article['title']}
-    来源: {article['source']}
-    内容:
-    {content_snippet}
+    你是一个 AI 技术情报专家。请基于以下多篇文章，整合生成当天简报。
+    重点：不要逐篇复述，务必提炼跨来源的趋势性洞察与共性信号。
 
     ---
-    请输出严格的 Markdown 格式总结（不要使用代码块包裹）：
+    资料（共 {len(items)} 篇）：
+    {merged}
 
-    **{article['source']}** · [{article['title']}]({article['url']})
-    > 💡 **核心观点**: (一句话概括核心发布或研究成果)
-    > 🎯 **关键技术**: (列出 2-3 个关键技术点/参数/性能提升)
-    > 🔮 **影响**: (一句话点评对开发者或行业的影响)
+    ---
+    请输出严格的 Markdown（不要使用代码块），结构如下：
+
+    # 今日 AI 简报
+    ## 今日要点
+    - (3-6 条，跨来源汇总)
+
+    ## 大厂动态
+    - **公司**：1-2 句概括关键更新
+
+    ## 技术趋势
+    - (3-5 条趋势洞察，强调变化与影响)
+
+    ## 文章索引
+    - [标题](链接) — 来源
     """
 
-    def _generate(contents):
-        return client.models.generate_content(
+    try:
+        response = client.models.generate_content(
             model=MODEL_NAME,
-            contents=contents,
+            contents=prompt,
             config=types.GenerateContentConfig(
                 safety_settings=safety_settings,
             ),
         )
-
-    try:
-        safety_settings = [
-            types.SafetySetting(
-                category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                threshold=types.HarmBlockThreshold.BLOCK_NONE,
-            ),
-            types.SafetySetting(
-                category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
-                threshold=types.HarmBlockThreshold.BLOCK_NONE,
-            ),
-            types.SafetySetting(
-                category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-                threshold=types.HarmBlockThreshold.BLOCK_NONE,
-            ),
-            types.SafetySetting(
-                category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-                threshold=types.HarmBlockThreshold.BLOCK_NONE,
-            ),
-        ]
-
-        response = _generate(prompt)
-        text = response.text if response else None
-        if text and "无法为您生成这篇简报" not in text:
-            return text
-
-        # 回退：仅使用标题/摘要，避免正文抓取失败或触发拒答
-        summary_fallback = article.get("summary") or "（无摘要）"
-        short_prompt = f"""
-        你是一个 AI 技术情报专家。请仅基于标题与摘要，为中文读者生成简报。
-
-        文章标题: {article['title']}
-        来源: {article['source']}
-        摘要:
-        {summary_fallback}
-
-        ---
-        请输出严格的 Markdown 格式总结（不要使用代码块包裹）：
-
-        **{article['source']}** · [{article['title']}]({article['url']})
-        > 💡 **核心观点**: (一句话概括核心发布或研究成果)
-        > 🎯 **关键技术**: (列出 2-3 个关键技术点/参数/性能提升)
-        > 🔮 **影响**: (一句话点评对开发者或行业的影响)
-        """
-        response = _generate(short_prompt)
-        return response.text if response else "（AI 总结失败）"
+        return response.text if response else None
     except Exception as e:
         print(f"Gemini Error: {e}")
-        return f"**{article['title']}**\n> (AI 总结失败: {str(e)})"
+        return None
 
 
 def send_to_feishu(content):
@@ -251,17 +272,9 @@ def main():
         print("今日无新文章")
         return
 
-    summaries = []
-    for art in articles:
-        summary = summarize_article(client, art)
-        if summary:
-            summaries.append(summary)
-        # Gemini 速率限制宽松 (Flash 版 15 RPM)，基本不需要 sleep，但安全起见休眠 2s
-        time.sleep(2)
-
-    if summaries:
-        final_report = "\n\n---\n\n".join(summaries)
-        send_to_feishu(final_report)
+    report = summarize_daily_brief(client, articles)
+    if report:
+        send_to_feishu(report)
 
 
 if __name__ == "__main__":
