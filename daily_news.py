@@ -128,7 +128,9 @@ def summarize_article(client, article):
         response = client.models.generate_content(
             model=MODEL_NAME,
             contents=prompt,
-            safety_settings=safety_settings,
+            config=types.GenerateContentConfig(
+                safety_settings=safety_settings,
+            ),
         )
         return response.text
     except Exception as e:
