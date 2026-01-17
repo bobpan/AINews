@@ -125,7 +125,7 @@ def summarize_article(client, article):
             ),
         ]
 
-        response = client.models.generate_content(
+        response = client.generate_content(
             model=MODEL_NAME,
             contents=prompt,
             config=types.GenerateContentConfig(
@@ -208,3 +208,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
