@@ -10,7 +10,7 @@ from google.genai import types
 FEISHU_WEBHOOK = os.getenv("FEISHU_WEBHOOK")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # 默认使用 gemini-2.5-flash，速度快且免费额度足够
-MODEL_NAME = os.getenv("MODEL_NAME", "gemini-2.5-flash")
+MODEL_NAME = os.getenv("MODEL_NAME") or "gemini-2.5-flash"
 
 # RSS 源列表
 RSS_SOURCES = [
@@ -125,7 +125,7 @@ def summarize_article(client, article):
             ),
         ]
 
-        response = client.generate_content(
+        response = client.models.generate_content(
             model=MODEL_NAME,
             contents=prompt,
             config=types.GenerateContentConfig(
