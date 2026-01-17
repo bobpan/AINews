@@ -3,14 +3,14 @@ import datetime
 import time
 import requests
 import feedparser
-import google.genai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
+from google import genai
+from google.genai import types
 
 # 配置
 FEISHU_WEBHOOK = os.getenv("FEISHU_WEBHOOK")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-# 默认使用 gemini-1.5-flash，速度快且免费额度足够
-MODEL_NAME = os.getenv("MODEL_NAME", "models/gemini-3-flash")
+# 默认使用 gemini-2.5-flash，速度快且免费额度足够
+MODEL_NAME = os.getenv("MODEL_NAME", "gemini-2.5-flash")
 
 # RSS 源列表
 RSS_SOURCES = [
@@ -23,13 +23,14 @@ RSS_SOURCES = [
     {"name": "Microsoft Research", "url": "https://www.microsoft.com/en-us/research/feed/"},
 ]
 
+
 def get_recent_articles():
     """抓取过去 24 小时的文章"""
     print("正在抓取 RSS 源...")
     recent_articles = []
     now = datetime.datetime.now(datetime.timezone.utc)
     cutoff = now - datetime.timedelta(hours=24)
-    
+
     for source in RSS_SOURCES:
         try:
             print(f"正在检查: {source['name']}...")
@@ -39,24 +40,33 @@ def get_recent_articles():
 
             for entry in feed.entries:
                 pub_date = None
-                if hasattr(entry, 'published_parsed') and entry.published_parsed:
-                    pub_date = datetime.datetime(*entry.published_parsed[:6], tzinfo=datetime.timezone.utc)
-                elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
-                     pub_date = datetime.datetime(*entry.updated_parsed[:6], tzinfo=datetime.timezone.utc)
-                
+                if hasattr(entry, "published_parsed") and entry.published_parsed:
+                    pub_date = datetime.datetime(
+                        *entry.published_parsed[:6],
+                        tzinfo=datetime.timezone.utc,
+                    )
+                elif hasattr(entry, "updated_parsed") and entry.updated_parsed:
+                    pub_date = datetime.datetime(
+                        *entry.updated_parsed[:6],
+                        tzinfo=datetime.timezone.utc,
+                    )
+
                 if pub_date and pub_date > cutoff:
                     print(f"  [发现新文章] {entry.title}")
-                    recent_articles.append({
-                        "title": entry.title,
-                        "url": entry.link,
-                        "source": source["name"],
-                        "date": pub_date.strftime("%Y-%m-%d")
-                    })
+                    recent_articles.append(
+                        {
+                            "title": entry.title,
+                            "url": entry.link,
+                            "source": source["name"],
+                            "date": pub_date.strftime("%Y-%m-%d"),
+                        }
+                    )
         except Exception as e:
             print(f"Error fetching {source['name']}: {e}")
             continue
-            
+
     return recent_articles
+
 
 def fetch_content_with_jina(url):
     """使用 Jina Reader 获取正文"""
@@ -69,25 +79,26 @@ def fetch_content_with_jina(url):
         pass
     return "（无法获取正文，请基于标题总结）"
 
-def summarize_article(model, article):
+
+def summarize_article(client, article):
     """调用 Gemini 总结单篇文章"""
     print(f"正在总结: {article['title']}...")
-    content = fetch_content_with_jina(article['url'])
-    
+    content = fetch_content_with_jina(article["url"])
+
     # Gemini 1.5 窗口很大，我们可以保留更多内容 (30k chars 约 10k tokens，安全)
     content_snippet = content[:30000]
-    
+
     prompt = f"""
     你是一个 AI 技术情报专家。请阅读以下技术博客内容，为中文读者生成这篇简报。
-    
+
     文章标题: {article['title']}
     来源: {article['source']}
-    内容: 
+    内容:
     {content_snippet}
-    
+
     ---
     请输出严格的 Markdown 格式总结（不要使用代码块包裹）：
-    
+
     **{article['source']}** · [{article['title']}]({article['url']})
     > 💡 **核心观点**: (一句话概括核心发布或研究成果)
     > 🎯 **关键技术**: (列出 2-3 个关键技术点/参数/性能提升)
@@ -95,22 +106,35 @@ def summarize_article(model, article):
     """
 
     try:
-        # 设置安全过滤为 BLOCK_NONE 以防止技术内容误判
-        safety_settings = {
-            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-        }
+        safety_settings = [
+            types.SafetySetting(
+                category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                threshold=types.HarmBlockThreshold.BLOCK_NONE,
+            ),
+            types.SafetySetting(
+                category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                threshold=types.HarmBlockThreshold.BLOCK_NONE,
+            ),
+            types.SafetySetting(
+                category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                threshold=types.HarmBlockThreshold.BLOCK_NONE,
+            ),
+            types.SafetySetting(
+                category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                threshold=types.HarmBlockThreshold.BLOCK_NONE,
+            ),
+        ]
 
-        response = model.generate_content(
-            prompt,
-            safety_settings=safety_settings
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=prompt,
+            safety_settings=safety_settings,
         )
         return response.text
     except Exception as e:
         print(f"Gemini Error: {e}")
         return f"**{article['title']}**\n> (AI 总结失败: {str(e)})"
+
 
 def send_to_feishu(content):
     """发送汇总到飞书"""
@@ -120,7 +144,7 @@ def send_to_feishu(content):
         return
 
     today = datetime.datetime.now().strftime("%Y-%m-%d")
-    
+
     card = {
         "msg_type": "interactive",
         "card": {
@@ -128,56 +152,57 @@ def send_to_feishu(content):
                 "template": "blue",
                 "title": {
                     "content": f"🚀 AI 每日速递 ({today})",
-                    "tag": "plain_text"
-                }
+                    "tag": "plain_text",
+                },
             },
             "elements": [
                 {
                     "tag": "markdown",
-                    "content": content if content else "今日前沿平静，暂无重大发布。"
+                    "content": content if content else "今日前沿平静，暂无重大发布。",
                 },
                 {
                     "tag": "note",
                     "elements": [
                         {
                             "tag": "plain_text",
-                            "content": f"Powered by Gemini 1.5 & GitHub Actions"
+                            "content": "Powered by Gemini 1.5 & GitHub Actions",
                         }
-                    ]
-                }
-            ]
-        }
+                    ],
+                },
+            ],
+        },
     }
-    
+
     requests.post(FEISHU_WEBHOOK, json=card)
     print("已推送到飞书")
+
 
 def main():
     if not GEMINI_API_KEY:
         print("Error: 请设置 GEMINI_API_KEY")
         return
 
-    # 初始化 Gemini
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel(MODEL_NAME)
+    # 初始化 Gemini (google-genai 新 SDK)
+    client = genai.Client(api_key=GEMINI_API_KEY)
 
     articles = get_recent_articles()
-    
+
     if not articles:
         print("今日无新文章")
         return
 
     summaries = []
     for art in articles:
-        summary = summarize_article(model, art)
+        summary = summarize_article(client, art)
         if summary:
             summaries.append(summary)
         # Gemini 速率限制宽松 (Flash 版 15 RPM)，基本不需要 sleep，但安全起见休眠 2s
-        time.sleep(2) 
+        time.sleep(2)
 
     if summaries:
         final_report = "\n\n---\n\n".join(summaries)
         send_to_feishu(final_report)
+
 
 if __name__ == "__main__":
     main()
