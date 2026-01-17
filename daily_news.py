@@ -21,6 +21,12 @@ RSS_SOURCES = [
     {"name": "Meta AI", "url": "https://ai.meta.com/blog/rss.xml"},
     {"name": "LangChain", "url": "https://blog.langchain.dev/rss/"},
     {"name": "Microsoft Research", "url": "https://www.microsoft.com/en-us/research/feed/"},
+    {"name": "Apple Machine Learning", "url": "https://machinelearning.apple.com/rss.xml"},
+    {"name": "AWS Machine Learning", "url": "https://aws.amazon.com/blogs/machine-learning/feed/"},
+    {"name": "Google AI Blog", "url": "https://ai.googleblog.com/feeds/posts/default"},
+    {"name": "OpenAI Research (arXiv)", "url": "https://export.arxiv.org/rss/cs.AI"},
+    {"name": "Machine Learning (arXiv)", "url": "https://export.arxiv.org/rss/cs.LG"},
+    {"name": "Papers With Code", "url": "https://paperswithcode.com/rss"},
 ]
 
 
@@ -131,6 +137,15 @@ def summarize_article(client, article):
     > 🔮 **影响**: (一句话点评对开发者或行业的影响)
     """
 
+    def _generate(contents):
+        return client.models.generate_content(
+            model=MODEL_NAME,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                safety_settings=safety_settings,
+            ),
+        )
+
     try:
         safety_settings = [
             types.SafetySetting(
@@ -151,14 +166,31 @@ def summarize_article(client, article):
             ),
         ]
 
-        response = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                safety_settings=safety_settings,
-            ),
-        )
-        return response.text
+        response = _generate(prompt)
+        text = response.text if response else None
+        if text and "无法为您生成这篇简报" not in text:
+            return text
+
+        # 回退：仅使用标题/摘要，避免正文抓取失败或触发拒答
+        summary_fallback = article.get("summary") or "（无摘要）"
+        short_prompt = f"""
+        你是一个 AI 技术情报专家。请仅基于标题与摘要，为中文读者生成简报。
+
+        文章标题: {article['title']}
+        来源: {article['source']}
+        摘要:
+        {summary_fallback}
+
+        ---
+        请输出严格的 Markdown 格式总结（不要使用代码块包裹）：
+
+        **{article['source']}** · [{article['title']}]({article['url']})
+        > 💡 **核心观点**: (一句话概括核心发布或研究成果)
+        > 🎯 **关键技术**: (列出 2-3 个关键技术点/参数/性能提升)
+        > 🔮 **影响**: (一句话点评对开发者或行业的影响)
+        """
+        response = _generate(short_prompt)
+        return response.text if response else "（AI 总结失败）"
     except Exception as e:
         print(f"Gemini Error: {e}")
         return f"**{article['title']}**\n> (AI 总结失败: {str(e)})"
