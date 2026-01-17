@@ -59,6 +59,8 @@ def get_recent_articles():
                             "url": entry.link,
                             "source": source["name"],
                             "date": pub_date.strftime("%Y-%m-%d"),
+                            "summary": getattr(entry, "summary", None)
+                            or getattr(entry, "description", None),
                         }
                     )
         except Exception as e:
@@ -68,22 +70,46 @@ def get_recent_articles():
     return recent_articles
 
 
-def fetch_content_with_jina(url):
-    """使用 Jina Reader 获取正文"""
+def fetch_content_with_jina(url, fallback_summary=None):
+    """使用 Jina Reader 获取正文，必要时回退到原站或摘要"""
     try:
         jina_url = f"https://r.jina.ai/{url}"
-        resp = requests.get(jina_url, timeout=20)
-        if resp.status_code == 200:
+        resp = requests.get(
+            jina_url,
+            timeout=20,
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; AINewsBot/1.0)",
+                "Referer": url,
+            },
+        )
+        if resp.status_code == 200 and resp.text:
             return resp.text
+        if resp.status_code == 403:
+            print("Jina Reader 403，尝试直连原站...")
     except Exception:
         pass
+    try:
+        direct = requests.get(
+            url,
+            timeout=20,
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; AINewsBot/1.0)",
+                "Referer": url,
+            },
+        )
+        if direct.status_code == 200 and direct.text:
+            return direct.text
+    except Exception:
+        pass
+    if fallback_summary:
+        return fallback_summary
     return "（无法获取正文，请基于标题总结）"
 
 
 def summarize_article(client, article):
     """调用 Gemini 总结单篇文章"""
     print(f"正在总结: {article['title']}...")
-    content = fetch_content_with_jina(article["url"])
+    content = fetch_content_with_jina(article["url"], article.get("summary"))
 
     # Gemini 1.5 窗口很大，我们可以保留更多内容 (30k chars 约 10k tokens，安全)
     content_snippet = content[:30000]
